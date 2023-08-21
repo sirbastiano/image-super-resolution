@@ -34,5 +34,5 @@ setup(
         'Topic :: Software Development :: Libraries',
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
-    packages=find_packages(exclude=('tests',)),
+    packages=find_packages(exclude=('tests','docs',)),
 )
