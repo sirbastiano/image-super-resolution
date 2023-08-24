@@ -5,15 +5,6 @@ from tensorflow.keras.models import Model
 
 from ISR.models.imagemodel import ImageModel
 
-WEIGHTS_URLS = {
-    'gans': {
-        'arch_params': {'C': 4, 'D': 3, 'G': 32, 'G0': 32, 'x': 4, 'T': 10},
-        'url': 'https://public-asai-dl-models.s3.eu-central-1.amazonaws.com/ISR/rrdn-C4-D3-G32-G032-T10-x4-GANS/rrdn-C4-D3-G32-G032-T10-x4_epoch299.hdf5',
-        'name': 'rrdn-C4-D3-G32-G032-T10-x4_epoch299.hdf5',
-    },
-}
-
-
 def make_model(arch_params, patch_size):
     """ Returns the model.
 
@@ -67,10 +58,10 @@ class RRDN(ImageModel):
     """
     
     def __init__(
-            self, arch_params={}, patch_size=None, beta=0.2, c_dim=3, kernel_size=3, init_val=0.05, weights=''
+            self, arch_params=None, patch_size=None, beta=0.2, c_dim=3, kernel_size=3, init_val=0.05, weights_path=''
     ):
-        if weights:
-            arch_params, c_dim, kernel_size, url, fname = get_network(weights)
+        if arch_params is None:
+            raise ValueError("arch_params must be provided.") 
         
         self.params = arch_params
         self.beta = beta
@@ -87,9 +78,8 @@ class RRDN(ImageModel):
         self.model = self._build_rdn()
         self.model._name = 'generator'
         self.name = 'rrdn'
-        if weights:
-            weights_path = tf.keras.utils.get_file(fname=fname, origin=url)
-            self.model.load_weights(weights_path)
+        if weights_path:
+            self.model.load_weights(weights_path)  # Load weights from the provided path
     
     def _dense_block(self, input_layer, d, t):
         """
@@ -131,16 +121,18 @@ class RRDN(ImageModel):
         
         # SUGGESTION: MAKE BETA LEARNABLE
         x = input_layer
+        
         for d in range(1, self.D + 1):
             LFF = self._dense_block(x, d, t)
-            LFF_beta = MultiplyBeta(self.beta)(LFF)
+            LFF_beta = Lambda(lambda x: x * self.beta)(LFF)
             x = Add(name='LRL_%d_%d' % (t, d))([x, LFF_beta])
-        x = MultiplyBeta(self.beta)(x)
+        x = Lambda(lambda x: x * self.beta)(x)
         x = Add(name='RRDB_%d_out' % (t))([input_layer, x])
         return x
     
     def _pixel_shuffle(self, input_layer):
         """ PixelShuffle implementation of the upscaling part. """
+        
         x = Conv2D(
             self.c_dim * self.scale ** 2,
             kernel_size=3,
@@ -148,8 +140,10 @@ class RRDN(ImageModel):
             kernel_initializer=self.initializer,
             name='PreShuffle',
         )(input_layer)
-
-        return PixelShuffle(self.scale)(x)
+        return Lambda(
+            lambda x: tf.nn.depth_to_space(x, block_size=self.scale, data_format='NHWC'),
+            name='PixelShuffle',
+        )(x)
     
     def _build_rdn(self):
         LR_input = Input(shape=(self.patch_size, self.patch_size, 3), name='LR_input')
@@ -187,33 +181,3 @@ class RRDN(ImageModel):
             name='SR',
         )(PS)
         return Model(inputs=LR_input, outputs=SR)
-
-class PixelShuffle(tf.keras.layers.Layer):
-    def __init__(self, scale, *args, **kwargs):
-        super(PixelShuffle, self).__init__(*args, **kwargs)
-        self.scale = scale
-
-    def call(self, x):
-        return tf.nn.depth_to_space(x, block_size=self.scale, data_format='NHWC')
-
-    def get_config(self):
-        config = super().get_config().copy()
-        config.update({
-            'scale': self.scale,
-        })
-        return config
-
-class MultiplyBeta(tf.keras.layers.Layer):
-    def __init__(self, beta, *args, **kwargs):
-        super(MultiplyBeta, self).__init__(*args, **kwargs)
-        self.beta = beta
-
-    def call(self, x, **kwargs):
-        return x * self.beta
-
-    def get_config(self):
-        config = super().get_config().copy()
-        config.update({
-            'beta': self.beta,
-        })
-        return config
